@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__aflpp__aflpp_list_tools",
+      "mcp__aflpp__aflpp_help",
+      "mcp__aflpp__aflpp_version",
+      "mcp__aflpp__aflpp_detect_build_system",
+      "mcp__aflpp__aflpp_list_corpus",
+      "mcp__aflpp__aflpp_list_builtin_dictionaries",
+      "mcp__aflpp__aflpp_list_findings",
+      "mcp__aflpp__aflpp_status",
+      "mcp__aflpp__aflpp_campaign_summary",
+      "mcp__aflpp__aflpp_whatsup",
+      "mcp__aflpp__aflpp_preflight_checks",
+      "mcp__aflpp__aflpp_suggest_fuzz_cluster_mix"
+    ]
+  },
+  "enabledMcpjsonServers": ["aflpp"]
+}

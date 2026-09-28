@@ -48,8 +48,33 @@ function err(tool: string, code: string, message: string): ToolResultErr {
   return { ok: false, tool, error: { code, message } };
 }
 
+const LEGACY_NAME_PREFIX = "aflpp.";
+const CANONICAL_NAME_PREFIX = "aflpp_";
+
+/**
+ * Canonical tool names use underscores (`aflpp_start_fuzz`) so they survive
+ * verbatim through MCP clients that sanitize tool names to /^[a-zA-Z0-9_-]+$/.
+ * Claude Code, for example, rewrites every other character to `_`, which would
+ * otherwise desync the names we advertise from the names an agent can call.
+ * The historical dotted spelling (`aflpp.start_fuzz`) still resolves.
+ */
+export function canonicalToolName(name: string): string {
+  if (!name.startsWith(LEGACY_NAME_PREFIX)) return name;
+  return CANONICAL_NAME_PREFIX + name.slice(LEGACY_NAME_PREFIX.length);
+}
+
 function findToolSpec(name: string): ToolSpec | undefined {
-  return TOOL_SPECS.find((t) => t.name === name);
+  const canonical = canonicalToolName(name);
+  return TOOL_SPECS.find((t) => t.name === canonical);
+}
+
+/**
+ * Resolve any accepted spelling of a tool name to its canonical name, or
+ * `undefined` if no such tool is registered. Lets callers verify dispatch
+ * without invoking the handler.
+ */
+export function resolveToolName(name: string): string | undefined {
+  return findToolSpec(name)?.name;
 }
 
 function globalInputSchema(properties: Record<string, object>, required: string[]): Tool["inputSchema"] {
@@ -221,14 +246,14 @@ async function listFindings(dirPath: string, type: "crash" | "hang", relBase: st
 }
 
 registerTool({
-  name: "aflpp.list_tools",
+  name: "aflpp_list_tools",
   description: "List AFL++ MCP tools and their short descriptions.",
   inputSchema: globalInputSchema({}, []),
-  handler: async () => ok("aflpp.list_tools", TOOL_SPECS.map(({ name, description }) => ({ name, description }))),
+  handler: async () => ok("aflpp_list_tools", TOOL_SPECS.map(({ name, description }) => ({ name, description }))),
 });
 
 registerTool({
-  name: "aflpp.help",
+  name: "aflpp_help",
   description: "Get detailed help for a tool (schema + description).",
   inputSchema: globalInputSchema(
     {
@@ -239,8 +264,8 @@ registerTool({
   handler: async (args) => {
     const toolName = requireString(args.tool_name, "tool_name");
     const spec = findToolSpec(toolName);
-    if (!spec) return err("aflpp.help", "NOT_FOUND", `Unknown tool '${toolName}'`);
-    return ok("aflpp.help", {
+    if (!spec) return err("aflpp_help", "NOT_FOUND", `Unknown tool '${toolName}'`);
+    return ok("aflpp_help", {
       name: spec.name,
       description: spec.description,
       inputSchema: spec.inputSchema,
@@ -249,13 +274,13 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.version",
+  name: "aflpp_version",
   description: "Get AFL++ and server version information.",
   inputSchema: globalInputSchema({}, []),
   handler: async () => {
     const cfg = getConfig();
     const aflppVersion = await getAflppReleaseVersion();
-    return ok("aflpp.version", {
+    return ok("aflpp_version", {
       serverVersion: "0.1.0",
       aflppVersion,
       aflppDir: path.relative(cfg.workspaceRoot, cfg.aflppDir).replaceAll("\\", "/"),
@@ -264,7 +289,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.init_workspace",
+  name: "aflpp_init_workspace",
   description:
     "Create a workspace under workspaces/<name> with standard subdirectories: in,out,targets,build,logs,dicts,repros,reports.",
   inputSchema: globalInputSchema(
@@ -285,7 +310,7 @@ registerTool({
       workspace: name,
       createdAt: nowIso(),
     });
-    return ok("aflpp.init_workspace", {
+    return ok("aflpp_init_workspace", {
       workspace: name,
       root: path.relative(cfg.workspaceRoot, base).replaceAll("\\", "/"),
       created: dirs,
@@ -294,7 +319,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.detect_build_system",
+  name: "aflpp_detect_build_system",
   description: "Detect a likely build system for a project path (heuristic).",
   inputSchema: globalInputSchema(
     {
@@ -325,11 +350,11 @@ registerTool({
     else if (isMake) system = "make";
 
     const hints: string[] = [];
-    hints.push("Use aflpp.build_instrumented with profile 'fast' for initial fuzzing.");
+    hints.push("Use aflpp_build_instrumented with profile 'fast' for initial fuzzing.");
     hints.push("For better crash diagnostics, consider profile 'asan' or 'ubsan'.");
     hints.push("For comparison-heavy targets, consider building a CMPLOG variant and using afl-fuzz -c.");
 
-    return ok("aflpp.detect_build_system", {
+    return ok("aflpp_detect_build_system", {
       project_path: projectPathRaw,
       detected: system,
       evidence: { isCmake, isMeson, isCargo, isAutotools, isMake },
@@ -339,7 +364,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.build_instrumented",
+  name: "aflpp_build_instrumented",
   description:
     "Run a constrained build command with AFL++ compiler wrappers and copy the resulting artifact into the workspace targets/ directory.",
   inputSchema: globalInputSchema(
@@ -504,7 +529,7 @@ registerTool({
     await safeCopyFile(cfg.workspaceRoot, artifactSrc, artifactDest);
     await fs.chmod(artifactDest, 0o755).catch(() => undefined);
 
-    return ok("aflpp.build_instrumented", {
+    return ok("aflpp_build_instrumented", {
       workspace,
       target_name: targetName,
       profile,
@@ -542,7 +567,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.build_cmplog_variant",
+  name: "aflpp_build_cmplog_variant",
   description:
     "Build a CMPLOG-instrumented variant by setting AFL_LLVM_CMPLOG=1 during compilation (LLVM mode) and copy the artifact into the workspace targets/ directory.",
   inputSchema: globalInputSchema(
@@ -689,7 +714,7 @@ registerTool({
     await safeCopyFile(cfg.workspaceRoot, artifactSrc, artifactDest);
     await fs.chmod(artifactDest, 0o755).catch(() => undefined);
 
-    return ok("aflpp.build_cmplog_variant", {
+    return ok("aflpp_build_cmplog_variant", {
       workspace,
       target_name: targetName,
       project_path: projectPathRaw,
@@ -725,7 +750,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.import_corpus",
+  name: "aflpp_import_corpus",
   description: "Import a seed corpus into workspaces/<ws>/in/<corpus_name> from a file or directory within the workspace root.",
   inputSchema: globalInputSchema(
     {
@@ -760,7 +785,7 @@ registerTool({
       throw new ToolError("INVALID_ARGUMENT", "src_path must be a file or directory");
     }
 
-    return ok("aflpp.import_corpus", {
+    return ok("aflpp_import_corpus", {
       workspace,
       corpus_name: corpusName,
       dest_path: path.relative(cfg.workspaceRoot, destDir).replaceAll("\\", "/"),
@@ -770,7 +795,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.list_corpus",
+  name: "aflpp_list_corpus",
   description: "Summarize a corpus directory (file count and total size).",
   inputSchema: globalInputSchema(
     {
@@ -805,7 +830,7 @@ registerTool({
       }
     }
 
-    return ok("aflpp.list_corpus", {
+    return ok("aflpp_list_corpus", {
       workspace,
       corpus_name: corpusName,
       path: path.relative(cfg.workspaceRoot, corpusDir).replaceAll("\\", "/"),
@@ -816,7 +841,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.list_builtin_dictionaries",
+  name: "aflpp_list_builtin_dictionaries",
   description: "List AFL++ builtin dictionaries shipped in the AFLplusplus/dictionaries directory.",
   inputSchema: globalInputSchema({}, []),
   handler: async () => {
@@ -830,12 +855,12 @@ registerTool({
         path: path.relative(cfg.workspaceRoot, path.join(dictDir, e.name)).replaceAll("\\", "/"),
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-    return ok("aflpp.list_builtin_dictionaries", { dictionaries: out });
+    return ok("aflpp_list_builtin_dictionaries", { dictionaries: out });
   },
 });
 
 registerTool({
-  name: "aflpp.attach_dictionary",
+  name: "aflpp_attach_dictionary",
   description: "Attach a dictionary file to a job name (stored as a job config to be used by start_fuzz).",
   inputSchema: globalInputSchema(
     {
@@ -872,7 +897,7 @@ registerTool({
     const updated = { ...existing, job_name: jobName, dictionary_paths: next, updated_at: nowIso() };
     await writeJsonFile(configPath, updated);
 
-    return ok("aflpp.attach_dictionary", {
+    return ok("aflpp_attach_dictionary", {
       workspace,
       job_name: jobName,
       dictionary_paths: next,
@@ -882,7 +907,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.dry_run",
+  name: "aflpp_dry_run",
   description:
     "Run a short harness validation directly against the target (not afl-fuzz): checks input mode, stability, and basic performance signals.",
   inputSchema: globalInputSchema(
@@ -965,9 +990,9 @@ registerTool({
     if (timedOutAny) nextSteps.push("Increase exec timeout (-t) and/or fix hangs/timeouts in the harness.");
     if (!stableExit) nextSteps.push("Ensure the target exits consistently for seed inputs (remove nondeterminism/state).");
     if (avgMs > 50) nextSteps.push("Target is slow; consider persistent mode and minimizing initialization work.");
-    if (nextSteps.length === 0) nextSteps.push("Proceed to aflpp.start_fuzz and poll aflpp.status regularly.");
+    if (nextSteps.length === 0) nextSteps.push("Proceed to aflpp_start_fuzz and poll aflpp_status regularly.");
 
-    return ok("aflpp.dry_run", {
+    return ok("aflpp_dry_run", {
       workspace,
       target_cmd: targetCmd,
       corpus_name: corpusName,
@@ -979,7 +1004,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.showmap",
+  name: "aflpp_showmap",
   description: "Run afl-showmap for a single testcase and return a summary of the trace.",
   inputSchema: globalInputSchema(
     {
@@ -1031,7 +1056,7 @@ registerTool({
       edges = 0;
     }
 
-    return ok("aflpp.showmap", {
+    return ok("aflpp_showmap", {
       workspace,
       testcase_path: path.relative(cfg.workspaceRoot, testcaseAbs).replaceAll("\\", "/"),
       trace_path: path.relative(cfg.workspaceRoot, outPath).replaceAll("\\", "/"),
@@ -1042,7 +1067,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.coverage_summary",
+  name: "aflpp_coverage_summary",
   description: "Measure corpus coverage using afl-showmap -C on an AFL++ output directory.",
   inputSchema: globalInputSchema(
     {
@@ -1135,7 +1160,7 @@ registerTool({
           }
         : null;
 
-    return ok("aflpp.coverage_summary", {
+    return ok("aflpp_coverage_summary", {
       workspace,
       out_dir: path.relative(cfg.workspaceRoot, outDirAbs).replaceAll("\\", "/"),
       target_cmd: targetCmd,
@@ -1153,7 +1178,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.analyze_testcase",
+  name: "aflpp_analyze_testcase",
   description: "Run afl-analyze on a testcase to identify critical input regions.",
   inputSchema: globalInputSchema(
     {
@@ -1210,7 +1235,7 @@ registerTool({
       maxLogBytes: cfg.maxLogFileBytes,
     });
 
-    return ok("aflpp.analyze_testcase", {
+    return ok("aflpp_analyze_testcase", {
       workspace,
       testcase_path: path.relative(cfg.workspaceRoot, testcaseAbs).replaceAll("\\", "/"),
       target_cmd: targetCmd,
@@ -1222,7 +1247,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.whatsup",
+  name: "aflpp_whatsup",
   description: "Run afl-whatsup on an AFL++ output directory.",
   inputSchema: globalInputSchema(
     {
@@ -1283,7 +1308,7 @@ registerTool({
       maxLogBytes: cfg.maxLogFileBytes,
     });
 
-    return ok("aflpp.whatsup", {
+    return ok("aflpp_whatsup", {
       workspace,
       out_dir: path.relative(cfg.workspaceRoot, outDirAbs).replaceAll("\\", "/"),
       argv,
@@ -1294,7 +1319,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.preflight_checks",
+  name: "aflpp_preflight_checks",
   description: "Run lightweight preflight checks before starting afl-fuzz (core_pattern, CPU scaling, corpus non-empty).",
   inputSchema: globalInputSchema(
     {
@@ -1358,7 +1383,7 @@ registerTool({
     const usesAtAt = targetCmd.some((a) => a.includes("@@"));
     const inputMode = usesAtAt ? "@@" : "stdin";
 
-    return ok("aflpp.preflight_checks", {
+    return ok("aflpp_preflight_checks", {
       workspace,
       target_cmd: targetCmd,
       corpus_name: corpusName,
@@ -1379,7 +1404,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.start_fuzz",
+  name: "aflpp_start_fuzz",
   description: "Start an afl-fuzz job in the workspace (non-blocking).",
   inputSchema: globalInputSchema(
     {
@@ -1597,7 +1622,7 @@ registerTool({
       },
     });
 
-    return ok("aflpp.start_fuzz", {
+    return ok("aflpp_start_fuzz", {
       workspace,
       job_id: jobName,
       job_name: jobName,
@@ -1628,7 +1653,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.start_fuzz_cluster",
+  name: "aflpp_start_fuzz_cluster",
   description: "Start a multi-instance afl-fuzz campaign (master + secondary instances).",
   inputSchema: globalInputSchema(
     {
@@ -2087,7 +2112,7 @@ registerTool({
       files_dir: path.relative(cfg.workspaceRoot, filesDir).replaceAll("\\", "/"),
     });
 
-    return ok("aflpp.start_fuzz_cluster", {
+    return ok("aflpp_start_fuzz_cluster", {
       workspace,
       campaign_id: campaignId,
       campaign_name: campaignName,
@@ -2100,8 +2125,8 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.suggest_fuzz_cluster_mix",
-  description: "Suggest a multi-core campaign mix (instance_overrides) for aflpp.start_fuzz_cluster.",
+  name: "aflpp_suggest_fuzz_cluster_mix",
+  description: "Suggest a multi-core campaign mix (instance_overrides) for aflpp_start_fuzz_cluster.",
   inputSchema: globalInputSchema(
     {
       instances: { type: "number" },
@@ -2169,14 +2194,14 @@ registerTool({
       instance_overrides[name] = override;
     }
 
-    return ok("aflpp.suggest_fuzz_cluster_mix", {
+    return ok("aflpp_suggest_fuzz_cluster_mix", {
       instances,
       master_instance_name: masterInstanceName,
       secondary_instance_prefix: secondaryPrefix,
       instance_names: instanceNames,
       instance_overrides,
       notes: [
-        "Apply by passing instance_overrides into aflpp.start_fuzz_cluster.",
+        "Apply by passing instance_overrides into aflpp_start_fuzz_cluster.",
         "To add sanitizer or laf-intel variants, override target_cmd per instance to point at the corresponding built binaries.",
         "To enable CMPLOG/redqueen, set cmplog_path (and optionally cmplog_level) for selected instances.",
         "To use SAND, set sanitizer_paths (afl-fuzz -w) for selected instances.",
@@ -2186,7 +2211,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.stop_fuzz",
+  name: "aflpp_stop_fuzz",
   description: "Stop a running afl-fuzz job by PID (SIGTERM then SIGKILL).",
   inputSchema: globalInputSchema(
     {
@@ -2231,12 +2256,12 @@ registerTool({
 
     const updated = { ...meta, stopped_at: nowIso() };
     await writeJsonFile(metaPath, updated);
-    return ok("aflpp.stop_fuzz", { workspace, job_name: jobName, pid });
+    return ok("aflpp_stop_fuzz", { workspace, job_name: jobName, pid });
   },
 });
 
 registerTool({
-  name: "aflpp.status",
+  name: "aflpp_status",
   description: "Get job status by parsing fuzzer_stats and queue/crashes/hangs counts (with deltas since last call).",
   inputSchema: globalInputSchema(
     {
@@ -2283,7 +2308,7 @@ registerTool({
 
     await writeJsonFile(lastPath, snapshot);
 
-    return ok("aflpp.status", {
+    return ok("aflpp_status", {
       workspace,
       job_name: jobName,
       instance_dir: path.relative(cfg.workspaceRoot, instanceDir).replaceAll("\\", "/"),
@@ -2295,7 +2320,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.campaign_summary",
+  name: "aflpp_campaign_summary",
   description: "Summarize a multi-instance campaign by parsing fuzzer_stats for each instance directory.",
   inputSchema: globalInputSchema(
     {
@@ -2333,7 +2358,7 @@ registerTool({
     }
     instanceDirs.sort((a, b) => a.localeCompare(b));
     if (instanceDirs.length === 0) {
-      return ok("aflpp.campaign_summary", {
+      return ok("aflpp_campaign_summary", {
         workspace,
         campaign_name: campaignName,
         out_dir: path.relative(cfg.workspaceRoot, outDir).replaceAll("\\", "/"),
@@ -2375,7 +2400,7 @@ registerTool({
       });
     }
 
-    return ok("aflpp.campaign_summary", {
+    return ok("aflpp_campaign_summary", {
       workspace,
       campaign_name: campaignName,
       out_dir: path.relative(cfg.workspaceRoot, outDir).replaceAll("\\", "/"),
@@ -2391,7 +2416,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.generate_progress_plot",
+  name: "aflpp_generate_progress_plot",
   description: "Generate an AFL++ progress plot for a job or campaign (wraps afl-plot).",
   inputSchema: globalInputSchema(
     {
@@ -2456,7 +2481,7 @@ registerTool({
         dependency_hint: dependencyHint,
       });
 
-      return ok("aflpp.generate_progress_plot", {
+      return ok("aflpp_generate_progress_plot", {
         workspace,
         kind: "job",
         job_name: jobName,
@@ -2516,7 +2541,7 @@ registerTool({
       });
     }
 
-    return ok("aflpp.generate_progress_plot", {
+    return ok("aflpp_generate_progress_plot", {
       workspace,
       kind: "campaign",
       campaign_name: campaignName,
@@ -2527,7 +2552,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.list_findings",
+  name: "aflpp_list_findings",
   description: "List crash and hang findings with stable IDs and paths.",
   inputSchema: globalInputSchema(
     {
@@ -2549,7 +2574,7 @@ registerTool({
     const crashes = await listFindings(path.join(instanceDir, "crashes"), "crash", `${relInstance}/crashes`);
     const hangs = await listFindings(path.join(instanceDir, "hangs"), "hang", `${relInstance}/hangs`);
 
-    return ok("aflpp.list_findings", {
+    return ok("aflpp_list_findings", {
       workspace,
       job_name: jobName,
       instance_dir: relInstance,
@@ -2560,7 +2585,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.repro_crash",
+  name: "aflpp_repro_crash",
   description:
     "Reproduce a finding by running the target command directly with the testcase; captures stdout/stderr and writes a repro bundle under repros/.",
   inputSchema: globalInputSchema(
@@ -2638,7 +2663,7 @@ registerTool({
       sanitizer: sanitizerHint,
     });
 
-    return ok("aflpp.repro_crash", {
+    return ok("aflpp_repro_crash", {
       workspace,
       job_name: jobName,
       finding_id: findingId,
@@ -2651,7 +2676,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.crash_report",
+  name: "aflpp_crash_report",
   description: "Write a crash report for a finding (dedup signature + repro info + sanitizer frames if present).",
   inputSchema: globalInputSchema(
     {
@@ -2819,7 +2844,7 @@ registerTool({
       minimize_testcase_hint: minimizedExists
         ? null
         : {
-            tool: "aflpp.minimize_testcase",
+            tool: "aflpp_minimize_testcase",
             args: {
               workspace,
               job_name: jobName,
@@ -2861,12 +2886,12 @@ registerTool({
     if (minimizedExists) {
       mdLines.push(`- \`${path.relative(cfg.workspaceRoot, minimizedPathAbs).replaceAll("\\", "/")}\``);
     } else {
-      mdLines.push("- Not found. Run `aflpp.minimize_testcase` on the testcase path.");
+      mdLines.push("- Not found. Run `aflpp_minimize_testcase` on the testcase path.");
     }
 
     await fs.writeFile(reportMdPath, mdLines.join("\n") + "\n", "utf8");
 
-    return ok("aflpp.crash_report", {
+    return ok("aflpp_crash_report", {
       workspace,
       job_name: jobName,
       finding_id: findingId,
@@ -2880,7 +2905,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.casr_report",
+  name: "aflpp_casr_report",
   description: "Generate clustered crash reports using casr-afl (if installed).",
   inputSchema: globalInputSchema(
     {
@@ -2942,7 +2967,7 @@ registerTool({
       maxLogBytes: cfg.maxLogFileBytes,
     });
 
-    return ok("aflpp.casr_report", {
+    return ok("aflpp_casr_report", {
       workspace,
       out_dir: path.relative(cfg.workspaceRoot, outDirAbs).replaceAll("\\", "/"),
       report_dir: path.relative(cfg.workspaceRoot, reportDir).replaceAll("\\", "/"),
@@ -2954,7 +2979,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.minimize_corpus",
+  name: "aflpp_minimize_corpus",
   description: "Minimize a corpus using afl-cmin and store it as a new corpus directory in the workspace.",
   inputSchema: globalInputSchema(
     {
@@ -3007,7 +3032,7 @@ registerTool({
       maxLogBytes: cfg.maxLogFileBytes,
     });
 
-    return ok("aflpp.minimize_corpus", {
+    return ok("aflpp_minimize_corpus", {
       workspace,
       input_corpus: corpusName,
       output_corpus: outCorpusName,
@@ -3019,7 +3044,7 @@ registerTool({
 });
 
 registerTool({
-  name: "aflpp.minimize_testcase",
+  name: "aflpp_minimize_testcase",
   description: "Minimize a single testcase using afl-tmin and store the minimized testcase under repros/.",
   inputSchema: globalInputSchema(
     {
@@ -3068,7 +3093,7 @@ registerTool({
       maxLogBytes: cfg.maxLogFileBytes,
     });
 
-    return ok("aflpp.minimize_testcase", {
+    return ok("aflpp_minimize_testcase", {
       workspace,
       job_name: jobName,
       input_testcase: path.relative(cfg.workspaceRoot, testcaseAbs).replaceAll("\\", "/"),
@@ -3103,7 +3128,7 @@ export async function runTool(name: string, rawArgs: unknown): Promise<ToolResul
     const res = await spec.handler(args);
     await writeToolLog(workspace, {
       ts: nowIso(),
-      tool: name,
+      tool: spec.name,
       ok: res.ok,
       durationMs: Date.now() - startedAt,
       args,
@@ -3113,10 +3138,10 @@ export async function runTool(name: string, rawArgs: unknown): Promise<ToolResul
     return res;
   } catch (e) {
     const te = e instanceof ToolError ? e : new ToolError("INTERNAL_ERROR", String(e));
-    const res = err(name, te.code, te.message);
+    const res = err(spec.name, te.code, te.message);
     await writeToolLog(workspace, {
       ts: nowIso(),
-      tool: name,
+      tool: spec.name,
       ok: false,
       durationMs: Date.now() - startedAt,
       args: rawArgs,

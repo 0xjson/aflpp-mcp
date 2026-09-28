@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "aflpp": {
+      "command": "node",
+      "args": ["dist/index.js"]
+    }
+  }
+}

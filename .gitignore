@@ -5,3 +5,5 @@ dist/
 workspaces/
 
 fixtures/
+
+.claude/settings.local.json
