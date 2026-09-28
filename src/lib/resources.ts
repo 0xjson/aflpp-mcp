@@ -1,8 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import zlib from "node:zlib";
 
 import { Resource, ResourceTemplate } from "@modelcontextprotocol/sdk/types.js";
 
+import { assertAflInstallPath } from "./aflpp.js";
 import { getConfig } from "./config.js";
 import { ToolError } from "./errors.js";
 import { ensureDir, pathExists, workspacePath } from "./fs.js";
@@ -24,6 +26,65 @@ function parseFuzzerStats(text: string): Record<string, string> {
     if (key) out[key] = value;
   }
   return out;
+}
+
+/**
+ * Where packaged AFL++ installs put their documentation. Only consulted when
+ * `AFLPP_ALLOW_EXTERNAL_AFL=1`, since these live outside the workspace root.
+ * Debian/Ubuntu ship some of these files gzipped.
+ */
+const PACKAGED_DOC_DIRS = [
+  "/usr/share/doc/afl++-doc",
+  "/usr/share/doc/afl++",
+  "/usr/share/doc/aflplusplus",
+  "/usr/local/share/doc/afl++",
+];
+
+function aflDocCandidates(sourceRelPath: string, packagedBasename: string): string[] {
+  const cfg = getConfig();
+  const candidates = [path.join(cfg.aflppDir, ...sourceRelPath.split("/"))];
+  const docDirs = [cfg.aflDocDir, ...(cfg.allowExternalAfl ? PACKAGED_DOC_DIRS : [])].filter(
+    (d): d is string => typeof d === "string",
+  );
+  for (const dir of docDirs) {
+    candidates.push(path.join(dir, packagedBasename));
+    candidates.push(path.join(dir, `${packagedBasename}.gz`));
+  }
+  return candidates;
+}
+
+/**
+ * Read an AFL++ doc from whichever layout is present: the source checkout first,
+ * then packaged locations, transparently gunzipping when needed.
+ */
+async function readAflDoc(sourceRelPath: string, packagedBasename: string): Promise<ReadResult> {
+  const tried: string[] = [];
+
+  for (const candidate of aflDocCandidates(sourceRelPath, packagedBasename)) {
+    let resolved: string;
+    try {
+      resolved = assertAflInstallPath(candidate, "AFL++ docs path");
+    } catch {
+      // Outside the workspace root and external installs are not permitted.
+      continue;
+    }
+    tried.push(resolved);
+    try {
+      const buf = await fs.readFile(resolved);
+      const text = resolved.endsWith(".gz") ? zlib.gunzipSync(buf).toString("utf8") : buf.toString("utf8");
+      return { mimeType: "text/markdown", text };
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  const hint = getConfig().allowExternalAfl
+    ? "Set AFLPP_DOC_DIR if this install keeps docs elsewhere."
+    : "Run 'git submodule update --init', or set AFLPP_ALLOW_EXTERNAL_AFL=1 to use a system AFL++ install.";
+  throw new ToolError(
+    "NOT_FOUND",
+    `AFL++ doc '${packagedBasename}' not found (tried: ${tried.join(", ") || "no readable location"}). ${hint}`,
+  );
 }
 
 async function countFindings(dirPath: string): Promise<number> {
@@ -140,21 +201,15 @@ export async function readResource(uri: string): Promise<ReadResult> {
   }
 
   if (uri === "aflpp://docs/fuzzing_in_depth") {
-    const p = assertWithinRoot(cfg.workspaceRoot, path.join(cfg.aflppDir, "docs", "fuzzing_in_depth.md"), "AFL++ docs path");
-    const text = await fs.readFile(p, "utf8");
-    return { mimeType: "text/markdown", text };
+    return await readAflDoc("docs/fuzzing_in_depth.md", "fuzzing_in_depth.md");
   }
 
   if (uri === "aflpp://docs/cmplog") {
-    const p = assertWithinRoot(cfg.workspaceRoot, path.join(cfg.aflppDir, "instrumentation", "README.cmplog.md"), "AFL++ docs path");
-    const text = await fs.readFile(p, "utf8");
-    return { mimeType: "text/markdown", text };
+    return await readAflDoc("instrumentation/README.cmplog.md", "README.cmplog.md");
   }
 
   if (uri === "aflpp://docs/env_variables") {
-    const p = assertWithinRoot(cfg.workspaceRoot, path.join(cfg.aflppDir, "docs", "env_variables.md"), "AFL++ docs path");
-    const text = await fs.readFile(p, "utf8");
-    return { mimeType: "text/markdown", text };
+    return await readAflDoc("docs/env_variables.md", "env_variables.md");
   }
 
   // Dynamic resources:

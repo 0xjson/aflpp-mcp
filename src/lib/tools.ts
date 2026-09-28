@@ -114,6 +114,18 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Render a path for output: workspace-relative when it lives under the root,
+ * absolute otherwise. An external AFL++ install would otherwise be reported as
+ * a chain of `../` segments.
+ */
+function displayPath(root: string, target: string): string {
+  const abs = path.resolve(target);
+  const rel = path.relative(root, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return abs;
+  return rel.replaceAll("\\", "/");
+}
+
 function stableIdFromPath(relativePath: string): string {
   return crypto.createHash("sha256").update(relativePath).digest("hex").slice(0, 16);
 }
@@ -283,7 +295,8 @@ registerTool({
     return ok("aflpp_version", {
       serverVersion: "0.1.0",
       aflppVersion,
-      aflppDir: path.relative(cfg.workspaceRoot, cfg.aflppDir).replaceAll("\\", "/"),
+      aflppDir: displayPath(cfg.workspaceRoot, cfg.aflppDir),
+      external: cfg.allowExternalAfl,
     });
   },
 });
@@ -440,7 +453,7 @@ registerTool({
     const buildLogPath = path.join(buildDir, "build.log");
 
     const env: NodeJS.ProcessEnv = { ...process.env };
-    env.AFL_PATH = cfg.aflppDir;
+    env.AFL_PATH = cfg.aflLibDir;
     env.AFL_QUIET = "1";
 
     if (profile === "lto") {
@@ -641,7 +654,7 @@ registerTool({
     const buildLogPath = path.join(buildDir, "build.log");
 
     const env: NodeJS.ProcessEnv = { ...process.env };
-    env.AFL_PATH = cfg.aflppDir;
+    env.AFL_PATH = cfg.aflLibDir;
     env.AFL_QUIET = "1";
     env.AFL_LLVM_CMPLOG = "1";
     env.CC = aflBin("afl-clang-fast");
@@ -846,16 +859,38 @@ registerTool({
   inputSchema: globalInputSchema({}, []),
   handler: async () => {
     const cfg = getConfig();
-    const dictDir = path.join(cfg.aflppDir, "dictionaries");
-    const entries = await fs.readdir(dictDir, { withFileTypes: true });
-    const out = entries
-      .filter((e) => e.isFile() && e.name.endsWith(".dict"))
-      .map((e) => ({
-        name: e.name,
-        path: path.relative(cfg.workspaceRoot, path.join(dictDir, e.name)).replaceAll("\\", "/"),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    return ok("aflpp_list_builtin_dictionaries", { dictionaries: out });
+
+    // A source checkout ships dictionaries/; most distro packages ship none.
+    const candidates = [path.join(cfg.aflppDir, "dictionaries")];
+    if (cfg.allowExternalAfl) {
+      candidates.push("/usr/share/afl/dictionaries", "/usr/share/afl++/dictionaries");
+    }
+
+    for (const dictDir of candidates) {
+      let entries;
+      try {
+        entries = await fs.readdir(dictDir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      const out = entries
+        .filter((e) => e.isFile() && e.name.endsWith(".dict"))
+        .map((e) => ({
+          name: e.name,
+          path: displayPath(cfg.workspaceRoot, path.join(dictDir, e.name)),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      if (out.length > 0) return ok("aflpp_list_builtin_dictionaries", { dictionaries: out });
+    }
+
+    // No dictionary directory anywhere: report it as an empty set rather than an
+    // internal error, since a packaged AFL++ legitimately has none.
+    return ok("aflpp_list_builtin_dictionaries", {
+      dictionaries: [],
+      note:
+        "No builtin dictionaries found. A source checkout ships them in AFLplusplus/dictionaries; " +
+        "most distro packages do not. Supply your own via aflpp_attach_dictionary.",
+    });
   },
 });
 
@@ -1040,7 +1075,7 @@ registerTool({
 
     const run = await runCommand(argv, {
       cwd: cfg.workspaceRoot,
-      env: { ...process.env, AFL_PATH: cfg.aflppDir },
+      env: { ...process.env, AFL_PATH: cfg.aflLibDir },
       timeoutMs: Math.max(timeoutMs + 1000, 5000),
       maxOutputBytes: cfg.maxToolOutputBytes,
       logFilePath: path.join(reportDir, `${id}.log`),
@@ -1126,7 +1161,7 @@ registerTool({
 
     const run = await runCommand(argv, {
       cwd: cfg.workspaceRoot,
-      env: { ...process.env, AFL_PATH: cfg.aflppDir },
+      env: { ...process.env, AFL_PATH: cfg.aflLibDir },
       timeoutMs: overallTimeoutMs,
       maxOutputBytes: cfg.maxToolOutputBytes,
       logFilePath: logPath,
@@ -1228,7 +1263,7 @@ registerTool({
 
     const run = await runCommand(argv, {
       cwd: cfg.workspaceRoot,
-      env: { ...process.env, AFL_PATH: cfg.aflppDir },
+      env: { ...process.env, AFL_PATH: cfg.aflLibDir },
       timeoutMs: overallTimeoutMs,
       maxOutputBytes: cfg.maxToolOutputBytes,
       logFilePath: logPath,
@@ -1301,7 +1336,7 @@ registerTool({
 
     const run = await runCommand(argv, {
       cwd: cfg.workspaceRoot,
-      env: { ...process.env, AFL_PATH: cfg.aflppDir },
+      env: { ...process.env, AFL_PATH: cfg.aflLibDir },
       timeoutMs,
       maxOutputBytes: cfg.maxToolOutputBytes,
       logFilePath: logPath,
@@ -1574,7 +1609,7 @@ registerTool({
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      AFL_PATH: cfg.aflppDir,
+      AFL_PATH: cfg.aflLibDir,
       AFL_NO_UI: "1",
       AFL_SKIP_CPUFREQ: "1",
       AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1",
@@ -1891,7 +1926,7 @@ registerTool({
 
     const baseEnv: NodeJS.ProcessEnv = {
       ...process.env,
-      AFL_PATH: cfg.aflppDir,
+      AFL_PATH: cfg.aflLibDir,
       AFL_NO_UI: "1",
       AFL_SKIP_CPUFREQ: "1",
       AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES: "1",
@@ -2439,7 +2474,7 @@ registerTool({
 
     const timeoutMs = requireOptionalNumber(args.timeout_ms, "timeout_ms") ?? 60_000;
 
-    const env: NodeJS.ProcessEnv = { ...process.env, AFL_PATH: cfg.aflppDir };
+    const env: NodeJS.ProcessEnv = { ...process.env, AFL_PATH: cfg.aflLibDir };
     const plotsRoot = workspacePath(cfg.workspaceRoot, workspace, "reports", "plots");
     await ensureDir(plotsRoot);
 
@@ -3025,7 +3060,7 @@ registerTool({
 
     const run = await runCommand(argv, {
       cwd: cfg.workspaceRoot,
-      env: { ...process.env, AFL_PATH: cfg.aflppDir },
+      env: { ...process.env, AFL_PATH: cfg.aflLibDir },
       timeoutMs: toolTimeoutMs,
       maxOutputBytes: cfg.maxToolOutputBytes,
       logFilePath: logPath,
@@ -3086,7 +3121,7 @@ registerTool({
 
     const run = await runCommand(argv, {
       cwd: cfg.workspaceRoot,
-      env: { ...process.env, AFL_PATH: cfg.aflppDir },
+      env: { ...process.env, AFL_PATH: cfg.aflLibDir },
       timeoutMs: toolTimeoutMs,
       maxOutputBytes: cfg.maxToolOutputBytes,
       logFilePath: path.join(reproDir, "tmin.log"),

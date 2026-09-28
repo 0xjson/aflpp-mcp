@@ -8,16 +8,19 @@ MCP server exposing AFL++ to coding agents. TypeScript, ESM, stdio transport,
 ```bash
 npm install
 npm run build          # tsc -> dist/
+npm run check          # both contract checks below
 npm run check:names    # tool-naming contract (fast, no side effects)
+npm run check:external # external-AFL++ opt-in + containment invariant
 npm run smoke:local    # end-to-end: build a toy target, fuzz it, stop it
 npm run dev            # tsx src/index.ts, no build step
 ```
 
-`check:names` and `smoke:local` both require `npm run build` first. `smoke:local`
-additionally needs a compiled AFL++ (see below) and writes into `workspaces/smoke/`.
+`check`, `check:names`, `check:external` and `smoke:local` all require
+`npm run build` first. `smoke:local` additionally needs a working AFL++ (see
+below) and writes into `workspaces/smoke/`.
 
-There is no unit test framework in this repo. Those two scripts are the
-verification story; keep them passing.
+There is no unit test framework in this repo. These scripts are the verification
+story; keep them passing.
 
 ## AFL++ submodule
 
@@ -89,7 +92,7 @@ output cap. Never block an MCP request on a fuzz campaign.
 3. Validate args with the `require*` helpers; throw `ToolError(CODE, msg)` for
    bad input. Return `ok(name, data)` / `err(name, code, msg)`.
 4. Route every path through the root check.
-5. Run `npm run check:names`.
+5. Run `npm run check`.
 6. Add it to the tool list in `README.md`.
 
 ## Client config
@@ -100,6 +103,18 @@ root, spawns the server with cwd set to that root (so relative `args` paths
 work, and `AFLPP_MCP_ROOT` correctly defaults to `process.cwd()`), expands
 `${VAR}` in `env` from the ambient environment, and does **not** expand
 `${CLAUDE_PROJECT_DIR}` there — that variable is hooks-only.
+
+### External AFL++
+
+`AFLPP_ALLOW_EXTERNAL_AFL=1` lets the AFL++ install sit outside `AFLPP_MCP_ROOT`
+(`AFLPP_DIR=/usr/bin`, `AFLPP_LIB_DIR=/usr/lib/afl`). It routes AFL++'s own paths
+through `assertAflInstallPath()` instead of `assertWithinRoot()`.
+
+**This must never widen containment for anything else.** Tool-argument paths keep
+going through `assertWithinRoot`/`workspacePath` regardless of the flag; widening
+that would turn the opt-in into arbitrary filesystem access. `npm run
+check:external` asserts both halves, including that traversal and absolute-path
+tool arguments are still refused while the flag is set.
 
 `.claude/settings.json` pre-approves the twelve inspection tools. Anything that
 builds, executes the target, starts or stops a campaign, or writes artifacts

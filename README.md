@@ -130,10 +130,41 @@ node dist/index.js
 
 - `AFLPP_MCP_ROOT` (default: current working directory) — all tool paths are
   confined to this directory.
-- `AFLPP_DIR` (default: `$AFLPP_MCP_ROOT/AFLplusplus`) — must be inside `AFLPP_MCP_ROOT`.
+- `AFLPP_DIR` (default: `$AFLPP_MCP_ROOT/AFLplusplus`) — must be inside
+  `AFLPP_MCP_ROOT` unless `AFLPP_ALLOW_EXTERNAL_AFL=1`.
+- `AFLPP_ALLOW_EXTERNAL_AFL` (default: unset) — allow AFL++ to live outside the
+  root, for system installs. See below.
+- `AFLPP_LIB_DIR` (default: `$AFLPP_DIR`) — where AFL++'s helper objects live;
+  exported as `AFL_PATH`.
+- `AFLPP_DOC_DIR` (default: unset) — where AFL++'s markdown docs live, if they
+  are not under `$AFLPP_DIR`.
 - `AFLPP_MCP_MAX_TOOL_OUTPUT_BYTES` (default: `200000`)
 - `AFLPP_MCP_MAX_LOG_BYTES` (default: `5000000`)
 - `AFLPP_MCP_DEFAULT_TIMEOUT_MS` (default: `30000`)
+
+### Using a system AFL++ instead of the submodule
+
+By default every path the server touches — including AFL++'s own binaries —
+must sit inside `AFLPP_MCP_ROOT`, so a packaged AFL++ in `/usr/bin` is refused.
+`AFLPP_ALLOW_EXTERNAL_AFL=1` lifts that restriction **for AFL++'s own binaries
+and docs only**. Workspaces, targets, corpora, and every path passed as a tool
+argument stay confined either way.
+
+On Debian/Ubuntu (`apt install afl++ afl++-doc`):
+
+```bash
+export AFLPP_ALLOW_EXTERNAL_AFL=1
+export AFLPP_DIR=/usr/bin
+export AFLPP_LIB_DIR=/usr/lib/afl
+```
+
+Docs are found automatically in `/usr/share/doc/afl++-doc` (gzipped files are
+decompressed transparently); set `AFLPP_DOC_DIR` if your install differs.
+
+Two caveats. Distro packages ship **no dictionaries**, so
+`aflpp_list_builtin_dictionaries` returns an empty list with a note — supply
+your own via `aflpp_attach_dictionary`. And the packaged version usually trails
+the submodule, so `aflpp_version` will report whatever apt installed.
 
 ### Development
 
